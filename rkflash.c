@@ -1,5 +1,6 @@
 /*-
  * Copyright (c) 2010 FUKAUMI Naoki.
+ * Copyright (c) 2011 Ithamar R. Adema. (added libusb support)
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +32,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <usb.h>
 
 struct cmd {
 	uint8_t hdr[4];	/* U S B C */
@@ -125,12 +128,32 @@ do {									\
 	(c).size = 0x20;						\
 } while(/* CONSTCOND */0)
 
-#define BULK_SEND_EP2(buf, size)	write(STDOUT_FILENO, (buf), (size))
-#define BULK_RECV_EP1(buf, size)	read(STDIN_FILENO, (buf), (size))
-
 #define _BLOCKSIZE	(16 * 1024)
 
 static char *progname;
+
+usb_dev_handle *locate_rk28(void)
+{
+	unsigned char located = 0;
+	struct usb_bus *bus;
+	struct usb_device *dev;
+	usb_dev_handle *device_handle = 0;
+
+	usb_find_busses();
+	usb_find_devices();
+
+	for (bus = usb_busses; bus; bus = bus->next) {
+		for (dev = bus->devices; dev; dev = dev->next) {
+			if (dev->descriptor.idVendor == 0x2207 && dev->descriptor.idProduct == 0x281a) {
+				located++;
+				device_handle = usb_open(dev);
+				printf("RK28x8 Device Found @ Address %s\n", dev->filename);
+			}
+		}
+	}
+
+  return device_handle;
+}
 
 static void
 usage(void)
@@ -143,6 +166,9 @@ usage(void)
 int
 main(int argc, char *argv[])
 {
+	struct usb_dev_handle *xsv_handle;
+	struct usb_device *xsv_device;
+	int open_status;
 	struct cmd c;
 	struct ret r;
 	uint32_t off;
@@ -188,6 +214,22 @@ main(int argc, char *argv[])
 
 	memset(buf, 0, _BLOCKSIZE);
 
+	usb_init();
+	usb_set_debug(2);
+	if ((xsv_handle = locate_rk28()) == 0) {
+		err(EXIT_FAILURE, "Could not find device\n");
+		return (-1);
+	}
+
+	open_status = usb_set_configuration(xsv_handle,1);
+	printf("conf_stat=%d\n",open_status);
+
+	open_status = usb_claim_interface(xsv_handle,0);
+	printf("claim_stat=%d\n",open_status);
+
+	open_status = usb_set_altinterface(xsv_handle,0);
+	printf("alt_stat=%d\n",open_status);
+
 	memset(&c, 0, sizeof(c));
 	c.hdr[0] = 'U';
 	c.hdr[1] = 'S';
@@ -195,8 +237,8 @@ main(int argc, char *argv[])
 	c.hdr[3] = 'C';
 
 	SETCMD_INIT(c);
-	BULK_SEND_EP2(&c, sizeof(c));
-	BULK_RECV_EP1(&r, sizeof(r));
+	usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
+	usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
 
 	usleep(20 * 1000);
 #if 0
@@ -211,11 +253,9 @@ main(int argc, char *argv[])
 			fprintf(stderr, "writing offset 0x%08x\n", off);
 
 			SETCMD_WRITE(c, off);
-			BULK_SEND_EP2(&c, sizeof(c));
-
-			BULK_SEND_EP2(buf, _BLOCKSIZE);
-
-			BULK_RECV_EP1(&r, sizeof(r));
+			usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
+			usb_bulk_write(xsv_handle, 2, buf, _BLOCKSIZE, 500);
+			usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
 
 			off += 0x20;
 			memset(buf, 0, _BLOCKSIZE);
@@ -225,11 +265,9 @@ main(int argc, char *argv[])
 			fprintf(stderr, "reading offset 0x%08x\n", off);
 
 			SETCMD_READ(c, off);
-			BULK_SEND_EP2(&c, sizeof(c));
-
-			BULK_RECV_EP1(buf, _BLOCKSIZE);
-
-			BULK_RECV_EP1(&r, sizeof(r));
+			usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
+			usb_bulk_read(xsv_handle, 1, buf, _BLOCKSIZE, 500);
+			usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
 
 			write(img, buf, _BLOCKSIZE);
 
@@ -244,8 +282,8 @@ main(int argc, char *argv[])
 		usleep(20 * 1000);
 
 		SETCMD_BOOT(c);
-		BULK_SEND_EP2(&c, sizeof(c));
-		BULK_RECV_EP1(&r, sizeof(r));
+		usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
+		usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
 	}
 
 	free(buf);
