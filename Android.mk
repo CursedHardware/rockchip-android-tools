@@ -1,3 +1,12 @@
+LOCAL_PATH:= $(call my-dir)
+include $(CLEAR_VARS)
+
+LOCAL_SRC_FILES := rkdecrypt.c
+
+LOCAL_MODULE := rkdecrypt
+LOCAL_MODULE_TAGS := eng
+
+include $(BUILD_HOST_EXECUTABLE)
 
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
