@@ -8,29 +8,32 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#define UPDATE_MAGIC	"RKAF"
+#define UPDATE_MAGIC	0x46414B52	/* "RKAF" */
 
 struct update_part {
-        char name[32];
-        char filename[32];
-        char reserved[32];
-        unsigned pos;
-        unsigned flags;
-        unsigned padded_size;
-        unsigned size;
+        char name[32];			/* 0x00 */
+        char path[64];			/* 0x20 */
+        unsigned pos;			/* 0x60 */
+        unsigned flashpos;		/* 0x64 */
+        unsigned padded_size;		/* 0x68 */
+        unsigned size;			/* 0x6c */
 };
 
 struct update_header {
-        char magic[4];
-        unsigned length;
-        char model[0x40];
-        char manufacturer[0x38];
-	unsigned unknown1;
-	unsigned unknown2;
-	unsigned num_parts;
+        unsigned magic;			/* 0x00 */
+        unsigned length;		/* 0x04 */
+        char model[0x40];		/* 0x08 */
+        char manufacturer[0x3c];	/* 0x48 */
+	unsigned version;		/* 0x84 */
+	unsigned num_parts;		/* 0x88 */
 
-	struct update_part parts[16];
+	struct update_part parts[16];	/* 0x8C */
 };
+
+unsigned ram_size, base_addr, atag_addr, krnl_addr;
+char mtd_id[256];
+int machine_id;
+struct update_header out;
 
 #define BOOTLOADER_MAGIC	"RK28@Copyright2008Rockchip"
 
@@ -246,7 +249,7 @@ check_update(const char *fname, struct update_header *header)
 		return -1;
 	}
 
-	if (strcmp(header->magic, UPDATE_MAGIC) != 0) {
+	if (header->magic != UPDATE_MAGIC) {
 		printf("Invalid image file\n");
 		return -1;
 	}
@@ -291,40 +294,41 @@ show_update_info(const char *fname)
 	return 0;
 }
 
-#if 0
-
 int
-parse_partitions(char **parms, int count)
+parse_partitions(char parms[50][200], int count)
 {
 	int i;
 
-	mtd_id = 0;
-	partition_count = 0;
+	mtd_id[0] = 0;
+	out.num_parts = 0;
 
 	for (i = 1; i < count; i++) {
 		if (sscanf(parms[i], "mtd_id=%s", mtd_id) >= 1)
 			continue;
+#if 0
 		if (sscanf(parms[i], "%s 0x%x:0x%x:%s", ) == 4 ||
 			sscanf(parms[i], "%s 0x%x:0x%x", ) == 3) {
+			++out.num_parts;
 		}
+#endif
 	}
 
 	return 0;
 }
 
 int
-parse_machineinfo(char **parms, int count)
+parse_machineinfo(char parms[50][200], int count)
 {
 	int i;
 
 	for (i = 1; i < count; i++) {
-		if (sscanf(parms[i], "manufacturer=%s", manufacturer) == 1)
+		if (sscanf(parms[i], "manufacturer=%s", out.manufacturer) == 1)
 			continue;
-		if (sscanf(parms[i], "machine_model=%s", machine_model) == 1)
+		if (sscanf(parms[i], "machine_model=%s", out.model) == 1)
 			continue;
-		if (sscanf(parms[i], "magic=0x%x", magic) == 1)
+		if (sscanf(parms[i], "magic=0x%x", &out.magic) == 1)
 			continue;
-		if (sscanf(parms[i], "machine_id=%d", machine_id) == 1)
+		if (sscanf(parms[i], "machine_id=%d", &machine_id) == 1)
 			continue;
 	}
 
@@ -332,7 +336,7 @@ parse_machineinfo(char **parms, int count)
 }
 
 int
-parse_ram(char **parms, int count)
+parse_ram(char parms[50][200], int count)
 {
 	int i;
 
@@ -356,7 +360,7 @@ parse_ram(char **parms, int count)
 }
 
 int
-parse_section(char **parms, int count)
+parse_section(char parms[50][200], int count)
 {
 	char buf[200], *p;
 
@@ -377,13 +381,6 @@ parse_section(char **parms, int count)
 
 	return 0;
 }
-#else
-int
-parse_section(char params[50][200], int count)
-{
-	return 0;
-}
-#endif
 
 int
 parse_hwdef(const char *fname)
@@ -466,7 +463,7 @@ extract_file(FILE *ifp, const char *outdir, struct update_part *part)
 	char *p, *c;
 	FILE *ofp;
 
-	snprintf(outbuf, sizeof(outbuf), "%s/%s", outdir, part->filename);
+	snprintf(outbuf, sizeof(outbuf), "%s/%s", outdir, part->path);
 	c=outbuf;
 
 	while ((p=strchr(c,'/')) != NULL || (p=strrchr(c, '\\')) != NULL) {
@@ -518,9 +515,9 @@ unpack_update(int argc, char **argv)
 	if (header.num_parts) {
 		unsigned i;
 		for (i=0; i < header.num_parts; i++) {
-			printf("%s\t0x%08X\t0x%08X\n", header.parts[i].filename, header.parts[i].pos, header.parts[i].size);
+			printf("%s\t0x%08X\t0x%08X\n", header.parts[i].path, header.parts[i].pos, header.parts[i].size);
 
-			if (strcmp(header.parts[i].filename, "SELF") == 0) {
+			if (strcmp(header.parts[i].path, "SELF") == 0) {
 				printf("Skip SELF file.\n");
 				continue;
 			}
