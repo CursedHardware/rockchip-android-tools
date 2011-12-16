@@ -68,7 +68,7 @@ do {									\
 	(c).size = 0x00;						\
 } while(/* CONSTCOND */0)
 
-#define SETCMD_UNKNOWN(c)							\
+#define SETCMD_UNKNOWN(c)						\
 do {									\
 	(c).cid++;							\
 	(c).flag = 0x00;						\
@@ -131,6 +131,7 @@ do {									\
 #define _BLOCKSIZE	(16 * 1024)
 
 static char *progname;
+static int verbose = 0;
 
 usb_dev_handle *locate_rk28(void)
 {
@@ -147,7 +148,8 @@ usb_dev_handle *locate_rk28(void)
 			if (dev->descriptor.idVendor == 0x2207 && dev->descriptor.idProduct == 0x281a) {
 				located++;
 				device_handle = usb_open(dev);
-				printf("RK28x8 Device Found @ Address %s\n", dev->filename);
+				if (verbose)
+					printf("RK28x8 Device Found @ Address %s\n", dev->filename);
 			}
 		}
 	}
@@ -175,13 +177,17 @@ main(int argc, char *argv[])
 	int32_t size;
 	uint8_t *buf;
 	int ch, img, boot;
+        int res, timeout;
 
 	progname = argv[0];
 
 	boot = 0;
 	size = 0;
-	while ((ch = getopt(argc, argv, "Br:")) != -1) {
+	while ((ch = getopt(argc, argv, "vBr:")) != -1) {
 		switch (ch) {
+		case 'v':
+			verbose++;
+			break;
 		case 'B':
 			boot = 1;
 			break;
@@ -215,20 +221,25 @@ main(int argc, char *argv[])
 	memset(buf, 0, _BLOCKSIZE);
 
 	usb_init();
-	usb_set_debug(2);
+	if (verbose)
+		usb_set_debug(verbose);
+
 	if ((xsv_handle = locate_rk28()) == 0) {
 		err(EXIT_FAILURE, "Could not find device\n");
 		return (-1);
 	}
 
 	open_status = usb_set_configuration(xsv_handle,1);
-	printf("conf_stat=%d\n",open_status);
+	if (verbose)
+		printf("conf_stat=%d\n",open_status);
 
 	open_status = usb_claim_interface(xsv_handle,0);
-	printf("claim_stat=%d\n",open_status);
+	if (verbose)
+		printf("claim_stat=%d\n",open_status);
 
 	open_status = usb_set_altinterface(xsv_handle,0);
-	printf("alt_stat=%d\n",open_status);
+	if (verbose)
+		printf("alt_stat=%d\n",open_status);
 
 	memset(&c, 0, sizeof(c));
 	c.hdr[0] = 'U';
@@ -236,38 +247,46 @@ main(int argc, char *argv[])
 	c.hdr[2] = 'B';
 	c.hdr[3] = 'C';
 
-	SETCMD_INIT(c);
-	usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
-	usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
+	for (timeout=0, res=-1; timeout < 10 && res < 0; timeout++) {
+		SETCMD_INIT(c);
+		usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
+		res = usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
+	}
+
+	if (timeout == 10) {
+		fprintf(stderr, "Error initializing device!\n");
+		return -1;
+	}
+
+	if (verbose && timeout)
+		fprintf(stderr, "took %d retries too initialize!\n", timeout);
 
 	usleep(20 * 1000);
-#if 0
-	SETCMD_UNKNOWN(c);
-	BULK_SEND_EP2(&c, sizeof(c));
-	BULK_RECV_EP1(&r, sizeof(r));
 
-	usleep(40 * 1000);
-#endif
 	if (size == 0) {
 		while (read(img, buf, _BLOCKSIZE) > 0) {
-			fprintf(stderr, "writing offset 0x%08x\n", off);
+			if (verbose)
+				fprintf(stderr, "writing offset 0x%08x\n", off);
 
 			SETCMD_WRITE(c, off);
 			usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
 			usb_bulk_write(xsv_handle, 2, buf, _BLOCKSIZE, 500);
-			usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
+			if (usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500) < 0)
+				fprintf(stderr, "error writing offset 0x%08x\n", off);
 
 			off += 0x20;
 			memset(buf, 0, _BLOCKSIZE);
 		}
 	} else {
 		while (size > 0) {
-			fprintf(stderr, "reading offset 0x%08x\n", off);
+			if (verbose)
+				fprintf(stderr, "reading offset 0x%08x\n", off);
 
 			SETCMD_READ(c, off);
 			usb_bulk_write(xsv_handle, 2, (void*)&c, sizeof(c), 500);
 			usb_bulk_read(xsv_handle, 1, buf, _BLOCKSIZE, 500);
-			usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500);
+			if (usb_bulk_read(xsv_handle, 1, (void*)&r, sizeof(r), 500) < 0)
+				fprintf(stderr, "error reading offset 0x%08x\n", off);
 
 			write(img, buf, _BLOCKSIZE);
 
